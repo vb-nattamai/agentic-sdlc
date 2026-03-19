@@ -14,7 +14,15 @@ pip-wheel-metadata/
 .venv/
 venv/
 env/
-.env
+
+# Pytest / coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.egg-info/
+dist/
+build/
 
 # Pipeline run artifacts (generated at runtime — not source)
 artifacts/
