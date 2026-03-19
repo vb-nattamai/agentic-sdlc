@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -34,6 +35,65 @@ def _get_semaphore() -> asyncio.Semaphore:
     if _LLM_SEMAPHORE is None:
         _LLM_SEMAPHORE = asyncio.Semaphore(2)
     return _LLM_SEMAPHORE
+
+
+class _AnthropicTokenBudget:
+    """
+    Sliding-window output-token budget for Anthropic rate-limit avoidance.
+
+    Tracks actual output tokens from Anthropic usage data and throttles
+    calls when approaching the per-minute limit (default: 9 000 tokens/min,
+    leaving 10 % headroom below the 10 000/min free-tier limit).
+    """
+
+    def __init__(self, limit: int = 9_000, window: float = 61.0) -> None:
+        self._limit = limit
+        self._window = window
+        self._log: list[tuple[float, int]] = []  # (monotonic_ts, tokens)
+        self._lock = asyncio.Lock()
+
+    def _prune(self, now: float) -> None:
+        """Drop entries older than the window."""
+        cutoff = now - self._window
+        self._log = [(t, n) for t, n in self._log if t > cutoff]
+
+    def _used(self) -> int:
+        return sum(n for _, n in self._log)
+
+    async def acquire(self, requested: int) -> None:
+        """
+        Block until the budget has room for `requested` tokens.
+        Uses `requested` as a conservative reservation.
+        """
+        async with self._lock:
+            while True:
+                now = time.monotonic()
+                self._prune(now)
+                if self._used() + requested <= self._limit:
+                    return
+                # Oldest entry drops off first — wait until it leaves the window
+                oldest_ts = self._log[0][0]
+                wait = (oldest_ts + self._window) - now + 0.2
+                console.print(
+                    f"[dim]Token budget: {self._used()}/{self._limit} used — "
+                    f"waiting {wait:.1f}s for window to roll over[/dim]"
+                )
+                await asyncio.sleep(wait)
+
+    def record(self, tokens: int) -> None:
+        """Record actual tokens consumed. Call after a successful response."""
+        self._log.append((time.monotonic(), tokens))
+
+
+# Module-level Anthropic token budget (one instance per process)
+_ANTHROPIC_BUDGET: _AnthropicTokenBudget | None = None
+
+
+def _get_anthropic_budget() -> _AnthropicTokenBudget:
+    global _ANTHROPIC_BUDGET
+    if _ANTHROPIC_BUDGET is None:
+        _ANTHROPIC_BUDGET = _AnthropicTokenBudget()
+    return _ANTHROPIC_BUDGET
 
 
 async def get_github_token() -> str:
@@ -119,10 +179,13 @@ async def _query_anthropic(
 
     max_retries = 6
     backoff = 10
+    budget = _get_anthropic_budget()
 
     async with semaphore:
         for attempt in range(1, max_retries + 1):
             try:
+                # Throttle: wait if we're near the per-minute output-token limit
+                await budget.acquire(max_tokens)
                 response = await asyncio.wait_for(
                     client.messages.create(
                         model=model,
@@ -132,7 +195,14 @@ async def _query_anthropic(
                     ),
                     timeout=120.0,
                 )
-                text = response.content[0].text
+                # Record actual usage so the budget stays accurate
+                actual_tokens = getattr(response.usage, "output_tokens", max_tokens)
+                budget.record(actual_tokens)
+                # Extract text safely — only TextBlock has a .text attribute
+                text = next(
+                    (b.text for b in response.content if isinstance(b, anthropic_sdk.types.TextBlock)),
+                    "",
+                )
                 # Strip markdown fences Claude sometimes adds despite instructions
                 if response_format == "json":
                     text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)

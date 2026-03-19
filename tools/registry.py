@@ -702,7 +702,7 @@ async def extract_blueprints(
             system=system_prompt,
             user=user_prompt,
             model=model,
-            max_tokens=2048,
+            max_tokens=1200,
             response_format="json",
         )
         data = json.loads(raw)

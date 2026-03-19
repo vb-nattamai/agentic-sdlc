@@ -107,7 +107,7 @@ class ReviewAgent(BaseAgent):
             f"iteration must be {iteration}."
         )
 
-        data = await self._llm_json(user_prompt, max_tokens=4096)
+        data = await self._llm_json(user_prompt, max_tokens=1200)
 
         # Enforce iteration value from context
         data["iteration"] = iteration

@@ -31,7 +31,7 @@ console = Console()
 
 MAX_ITERATIONS = 60
 TOOL_OUTPUT_TRUNCATE = 2000
-TOOL_HISTORY_WINDOW = 8
+TOOL_HISTORY_WINDOW = 5
 LOOP_DETECTION_WINDOW = 5
 
 
@@ -139,7 +139,13 @@ class PipelineState:
             "constraints": self.constraints,
             "output_dir": self.output_dir,
             "requirements_length": len(self.requirements),
-            "requirements": self.requirements[:2000] + ("[truncated]" if len(self.requirements) > 2000 else ""),
+            # Include full text only until discovery has run — after that the
+            # discovery artifact carries the structured version, saving tokens.
+            "requirements": (
+                self.requirements[:2000] + ("[truncated]" if len(self.requirements) > 2000 else "")
+                if "discovery" not in self.completed_steps
+                else "[see discovery artifact]"
+            ),
         }
         return json.dumps(summary, indent=2)
 
@@ -607,7 +613,7 @@ async def _get_decision(
                 system=orchestrator_prompt,
                 user=prompt,
                 model=model,
-                max_tokens=1024,
+                max_tokens=400,
                 response_format="json",
             )
         except RuntimeError as exc:

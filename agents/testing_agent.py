@@ -87,7 +87,7 @@ class TestingAgent(BaseAgent):
             "passed at top level = true only if ALL checks passed."
         )
 
-        data = await self._llm_json(user_prompt, max_tokens=4096)
+        data = await self._llm_json(user_prompt, max_tokens=1500)
         data["stage"] = "architecture"
         artifact = TestingArtifact.model_validate(data)
         self._save_artifact(artifact, "05a_testing_architecture.json")
@@ -131,7 +131,7 @@ class TestingAgent(BaseAgent):
             "Use realistic but safe test data. Return JSON array only."
         )
 
-        test_cases_raw = await self._llm_json(test_gen_prompt, max_tokens=4096)
+        test_cases_raw = await self._llm_json(test_gen_prompt, max_tokens=1500)
         test_cases = test_cases_raw if isinstance(test_cases_raw, list) else test_cases_raw.get("tests", [])
 
         checks: list[dict[str, Any]] = []
@@ -206,7 +206,7 @@ class TestingAgent(BaseAgent):
             "Top-level passed = true only if ALL requirements are traced and met."
         )
 
-        data = await self._llm_json(user_prompt, max_tokens=4096)
+        data = await self._llm_json(user_prompt, max_tokens=1500)
         data["stage"] = "final"
         artifact = TestingArtifact.model_validate(data)
         self._save_artifact(artifact, "05c_testing_review.json")
@@ -243,7 +243,7 @@ class TestingAgent(BaseAgent):
                 "Return ONLY the raw TypeScript file content."
             )
 
-            cypress_content = await self._llm(cypress_prompt, max_tokens=4096, response_format="text")
+            cypress_content = await self._llm(cypress_prompt, max_tokens=1500, response_format="text")
 
             cypress_dir = Path(output_dir) / "generated" / "cypress"
             cypress_dir.mkdir(parents=True, exist_ok=True)

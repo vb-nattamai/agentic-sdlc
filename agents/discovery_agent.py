@@ -58,7 +58,7 @@ class DiscoveryAgent(BaseAgent):
             "Every field is required. Use empty lists where nothing applies."
         )
 
-        data = await self._llm_json(user_prompt, max_tokens=4096)
+        data = await self._llm_json(user_prompt, max_tokens=1500)
         artifact = DiscoveryArtifact.model_validate(data)
         self._save_artifact(artifact, "01_discovery_artifact.json")
         return artifact

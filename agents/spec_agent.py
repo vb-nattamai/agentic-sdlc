@@ -89,7 +89,7 @@ class SpecAgent(BaseAgent):
             "Return ONLY a valid JSON object matching the GeneratedSpecArtifact schema."
         )
 
-        data = await self._llm_json(user_prompt, max_tokens=8192)
+        data = await self._llm_json(user_prompt, max_tokens=4096)
         artifact = GeneratedSpecArtifact.model_validate(data)
 
         # Write spec files to disk
