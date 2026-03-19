@@ -1,0 +1,32 @@
+# pipeline.yaml — Agentic SDLC project configuration template
+#
+# Copy this file and customise it for your project.
+# All settings can be overridden by CLI flags.
+
+# Path to your requirements text file
+requirements: requirements.txt
+
+# Output directory for generated artifacts
+# Defaults to: artifacts/run_YYYYMMDD_HHMMSS
+output_dir: ./artifacts/my_project
+
+# LLM model to use (GitHub Models API)
+# Can be overridden with --model flag or PIPELINE_MODEL env var
+model: gpt-4o
+
+# Set to true to skip all human checkpoints (CI/CD mode)
+auto: false
+
+# Spec configuration
+spec:
+  # Technology stack constraints
+  # Example: "Must use Kotlin 1.9 and React 18. No GraphQL."
+  tech_constraints: ""
+
+  # Architectural constraints
+  # Example: "Stateless services only. JWT auth. No sessions."
+  arch_constraints: ""
+
+  # Existing spec files to include in the spec agent context (repeatable)
+  # These are merged into the spec generation context but not marked x-existing
+  files: []
