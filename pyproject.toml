@@ -37,11 +37,16 @@ dev = [
 ]
 
 [project.scripts]
-agentic-sdlc = "main:main"
+agentic-sdlc = "main:cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["agents*", "models*", "tools*"]
+
+# Root-level modules (main, orchestrator, checkpoints) are not inside a package;
+# declare them here so `pip install -e .` makes the console script importable.
+[tool.setuptools]
+py-modules = ["main", "orchestrator", "checkpoints"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

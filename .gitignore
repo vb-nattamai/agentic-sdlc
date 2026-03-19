@@ -32,7 +32,8 @@ generated/
 
 # Environment / secrets
 .env
-.env.*
+.env.local
+.env.*.local
 *.env
 
 # macOS

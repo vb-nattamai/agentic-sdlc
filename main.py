@@ -477,5 +477,10 @@ def _print_final_summary(state: "PipelineState") -> None:  # type: ignore[name-d
 # ---------------------------------------------------------------------------
 
 
+def cli() -> None:
+    """Synchronous console-script entry point (wraps the async main coroutine)."""
+    asyncio.run(main())
+
+
 if __name__ == "__main__":
     asyncio.run(main())
