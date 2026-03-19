@@ -349,7 +349,21 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
         # ------------------------------------------------------------------ #
         # Step 5: Validate action                                             #
         # ------------------------------------------------------------------ #
-        if decision.action not in TOOL_REGISTRY and decision.action != "none":
+        if decision.action == "none":
+            # Orchestrator chose to wait (e.g. after a checkpoint was skipped
+            # in auto mode).  Record it and let the loop continue so the LLM
+            # can decide the next real action on the next iteration.
+            state.tool_history.append({
+                "iteration": iteration,
+                "action": "none",
+                "params": {},
+                "success": True,
+                "output": "no-op",
+            })
+            state.save(state_file)
+            continue
+
+        if decision.action not in TOOL_REGISTRY:
             console.print(
                 Panel(
                     f"Unknown action: {decision.action}\nAvailable: {sorted(TOOL_REGISTRY.keys())}",
@@ -451,7 +465,7 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
                     step_key = _step_key(agent_name, decision.params)
                     if step_key not in state.completed_steps:
                         state.completed_steps.append(step_key)
-                except (json.JSONDecodeError, ValueError):
+                except ValueError:
                     pass  # Output may not be JSON — that's OK
 
             # Store blueprints when extract_blueprints succeeds
