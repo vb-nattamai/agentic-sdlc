@@ -182,6 +182,9 @@ class InfrastructureAgent(BaseAgent):
         for rel_path, content in files.items():
             target = out_base / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
+            # Guard: LLM sometimes returns a dict instead of a string for file content
+            if not isinstance(content, str):
+                content = json.dumps(content, indent=2)
             target.write_text(content, encoding="utf-8")
 
         # Extract health endpoints from docker-compose content

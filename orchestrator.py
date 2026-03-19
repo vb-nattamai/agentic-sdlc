@@ -360,6 +360,10 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
                 console.print("[yellow]Pipeline aborted by human. State saved.[/yellow]")
                 state.save(state_file)
                 return state
+            # Record that this review was acknowledged so the LLM doesn't re-request it
+            review_step = f"{decision.action}_reviewed"
+            if review_step not in state.completed_steps:
+                state.completed_steps.append(review_step)
 
         # ------------------------------------------------------------------ #
         # Step 5: Validate action                                             #
@@ -434,6 +438,10 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
                 if params.get("agent_name") == "discovery":
                     ctx.setdefault("requirements", state.requirements)
                     ctx.setdefault("constraints", state.constraints)
+                # Auto-inject artifacts for agents that need them from state
+                for artifact_key in ("discovery", "architecture", "spec"):
+                    if artifact_key not in ctx and artifact_key in state.artifacts:
+                        ctx.setdefault(artifact_key, state.artifacts[artifact_key])
                 params["context"] = ctx
             if decision.action in ("spawn_agent", "delegate_agent"):
                 params.setdefault("output_dir", state.output_dir)
