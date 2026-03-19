@@ -422,12 +422,12 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
             model_name = state.config.get("model", "gpt-4o")
             if decision.action in ("delegate_agent", "spawn_agent"):
                 ctx = dict(params.get("context", {}))
-                ctx.setdefault("model", model_name)
+                ctx["model"] = model_name  # always force — LLM may suggest wrong model
                 params["context"] = ctx
             if decision.action in ("spawn_agent", "delegate_agent"):
                 params.setdefault("output_dir", state.output_dir)
             if decision.action == "extract_blueprints":
-                params.setdefault("model", model_name)
+                params["model"] = model_name  # always force — LLM may suggest wrong model
                 params.setdefault("output_dir", state.output_dir)
 
         tool_fn = TOOL_REGISTRY[decision.action]

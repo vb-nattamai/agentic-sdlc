@@ -69,6 +69,109 @@ async def get_github_token() -> str:
     return token
 
 
+async def _query_anthropic(
+    system: str,
+    user: str,
+    model: str,
+    max_tokens: int,
+    response_format: Literal["text", "json"],
+    semaphore: asyncio.Semaphore,
+) -> str:
+    """
+    Send a single LLM request to the Anthropic API (claude-* models).
+
+    Auth: reads ANTHROPIC_API_KEY from the environment.
+
+    Args:
+        system:          System prompt string.
+        user:            User message string.
+        model:           Anthropic model identifier (e.g. claude-sonnet-4-5).
+        max_tokens:      Maximum tokens in the response.
+        response_format: "text" or "json".  For "json", a JSON-only instruction
+                         is appended to the system prompt (Anthropic has no
+                         native json_object response format).
+        semaphore:       Concurrency semaphore.
+
+    Returns:
+        Raw response text string.
+
+    Raises:
+        RuntimeError: If ANTHROPIC_API_KEY is unset or all retries are exhausted.
+    """
+    import anthropic as anthropic_sdk  # lazy import — only needed for claude-* models
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY environment variable is not set.\n"
+            "Get a key at https://console.anthropic.com and add it to your .env file."
+        )
+
+    client = anthropic_sdk.AsyncAnthropic(api_key=api_key)
+
+    system_prompt = system
+    if response_format == "json":
+        system_prompt = (
+            system
+            + "\n\nIMPORTANT: Respond ONLY with valid JSON. "
+            "Do not include markdown fences, explanations, or any text outside the JSON object."
+        )
+
+    max_retries = 3
+    backoff = 5
+
+    async with semaphore:
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = await asyncio.wait_for(
+                    client.messages.create(
+                        model=model,
+                        max_tokens=max_tokens,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": user}],
+                    ),
+                    timeout=120.0,
+                )
+                text = response.content[0].text
+                # Strip markdown fences Claude sometimes adds despite instructions
+                if response_format == "json":
+                    text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
+                    text = re.sub(r"\s*```$", "", text.strip())
+                return text
+
+            except asyncio.TimeoutError:
+                err = f"Anthropic call timed out (attempt {attempt}/{max_retries})"
+                console.print(f"[yellow]{err}[/yellow]")
+                if attempt == max_retries:
+                    raise RuntimeError(err)
+                await asyncio.sleep(backoff * attempt)
+
+            except Exception as exc:  # noqa: BLE001
+                err_str = str(exc)
+                is_rate_limit = (
+                    "429" in err_str
+                    or "rate_limit" in err_str.lower()
+                    or "overloaded" in err_str.lower()
+                )
+                # Non-retriable billing / auth errors — fail immediately
+                is_fatal = (
+                    "credit balance" in err_str.lower()
+                    or "invalid_api_key" in err_str.lower()
+                    or "permission_error" in err_str.lower()
+                )
+                console.print(
+                    f"[yellow]Anthropic error (attempt {attempt}/{max_retries}): {err_str}[/yellow]"
+                )
+                if attempt == max_retries or is_fatal:
+                    raise RuntimeError(
+                        f"Anthropic call failed after {max_retries} attempts: {err_str}"
+                    ) from exc
+                sleep_time = backoff * attempt if is_rate_limit else backoff
+                await asyncio.sleep(sleep_time)
+
+    raise RuntimeError("Unreachable: _query_anthropic exhausted retries without returning")
+
+
 async def query_llm(
     system: str,
     user: str,
@@ -78,7 +181,8 @@ async def query_llm(
     semaphore: asyncio.Semaphore | None = None,
 ) -> str:
     """
-    Send a single LLM request to the GitHub Models API (OpenAI-compatible endpoint).
+    Send a single LLM request.  Routes to Anthropic for claude-* models;
+    uses the GitHub Models API (OpenAI-compatible) for everything else.
 
     Args:
         system:          System prompt string.
@@ -86,7 +190,7 @@ async def query_llm(
         model:           Model identifier (default: gpt-4o).
         max_tokens:      Maximum tokens in the response.
         response_format: "text" for plain text; "json" appends a JSON instruction
-                         and sets the API response format to json_object.
+                         and (for OpenAI) sets the response format to json_object.
         semaphore:       Optional asyncio.Semaphore to limit concurrency.
                          Falls back to the module-level semaphore (limit 2).
 
@@ -97,6 +201,16 @@ async def query_llm(
         RuntimeError: If all retry attempts are exhausted.
     """
     sem = semaphore or _get_semaphore()
+
+    # ------------------------------------------------------------------ #
+    # Anthropic path — claude-* models                                    #
+    # ------------------------------------------------------------------ #
+    if model.startswith("claude-"):
+        return await _query_anthropic(system, user, model, max_tokens, response_format, sem)
+
+    # ------------------------------------------------------------------ #
+    # GitHub Models / OpenAI path                                         #
+    # ------------------------------------------------------------------ #
     token = await get_github_token()
 
     client = AsyncOpenAI(
