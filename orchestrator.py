@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -97,7 +98,8 @@ class PipelineState:
         Build a compact JSON summary for the orchestrator LLM.
 
         Includes completed steps, artifact keys, last 8 tool history entries
-        (output truncated to 500 chars), and non-zero failed attempts.
+        (output truncated to 300 chars, file content replaced with a size hint),
+        and non-zero failed attempts.
 
         Returns:
             JSON string of the summary dict.
@@ -105,8 +107,14 @@ class PipelineState:
         recent_history = []
         for entry in self.tool_history[-TOOL_HISTORY_WINDOW:]:
             compact_entry = dict(entry)
-            if "output" in compact_entry and len(str(compact_entry["output"])) > 500:
-                compact_entry["output"] = str(compact_entry["output"])[:500] + "[truncated]"
+            raw_out = str(compact_entry.get("output", ""))
+            action = compact_entry.get("action", "")
+            # Replace raw file content with a size hint to prevent YAML/code
+            # in tool history from breaking the orchestrator's JSON response.
+            if action in ("file_read",) and len(raw_out) > 200:
+                compact_entry["output"] = f"[file content {len(raw_out)} chars — use file_read again to inspect]"
+            elif len(raw_out) > 300:
+                compact_entry["output"] = raw_out[:300] + "[truncated]"
             recent_history.append(compact_entry)
 
         # Summarise blueprints: show name, role, technology only (skip file contents)
@@ -406,9 +414,25 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
         # ------------------------------------------------------------------ #
         # Step 7: Execute the tool                                            #
         # ------------------------------------------------------------------ #
+
+        # Ensure agent-calling tools always receive the correct model and
+        # output_dir even if the orchestrator LLM omits them from its params.
+        params = dict(decision.params)
+        if decision.action in ("delegate_agent", "spawn_agent", "extract_blueprints"):
+            model_name = state.config.get("model", "gpt-4o")
+            if decision.action in ("delegate_agent", "spawn_agent"):
+                ctx = dict(params.get("context", {}))
+                ctx.setdefault("model", model_name)
+                params["context"] = ctx
+            if decision.action in ("spawn_agent", "delegate_agent"):
+                params.setdefault("output_dir", state.output_dir)
+            if decision.action == "extract_blueprints":
+                params.setdefault("model", model_name)
+                params.setdefault("output_dir", state.output_dir)
+
         tool_fn = TOOL_REGISTRY[decision.action]
         try:
-            result = await tool_fn(**decision.params)
+            result = await tool_fn(**params)
         except TypeError as exc:
             # Wrong params — record as failure and continue
             result_output = f"Parameter error: {exc}"
@@ -504,10 +528,24 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
             state.failed_attempts[decision.action] = (
                 state.failed_attempts.get(decision.action, 0) + 1
             )
+            error_str = result.error or ""
+            # Halt immediately on rate-limit errors — no point retrying;
+            # every iteration burns more daily quota.
+            if "RateLimitReached" in error_str or "rate limit" in error_str.lower():
+                state.save(state_file)
+                raise PipelineHaltError(
+                    f"GitHub Models rate limit hit at iteration {iteration}. "
+                    "Resume with --resume when the limit resets (check the "
+                    "'Please wait N seconds' value in the error above).\n\n"
+                    f"Resume command:\n  python3 main.py --resume "
+                    f"{state.output_dir}/checkpoints/step_{len(state.completed_steps)}.json "
+                    f"--model {state.config.get('model', 'gpt-4o-mini')} --auto",
+                    state=state,
+                )
             console.print(
                 Panel(
                     f"[red]Error:[/red] {result.error or 'Unknown error'}\n\n"
-                    f"[dim]{truncated_output[:300]}[/dim]",
+                    f"[dim]{(result.output or '')[:300]}[/dim]",
                     title=f"[red]✗ {decision.action} failed[/red]",
                     border_style="red",
                 )
@@ -574,7 +612,12 @@ async def _get_decision(
                 state=state,
             ) from exc
         try:
-            data = json.loads(raw)
+            # Strip markdown fences if the model wrapped the JSON anyway
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+                cleaned = re.sub(r"\n?```$", "", cleaned.strip())
+            data = json.loads(cleaned)
             return OrchestratorDecision.model_validate(data)
         except (json.JSONDecodeError, ValidationError) as exc:
             last_error = str(exc)
