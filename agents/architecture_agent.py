@@ -85,7 +85,7 @@ class ArchitectureAgent(BaseAgent):
             "Return ONLY a valid JSON object matching the ArchitectureArtifact schema."
         )
 
-        data = await self._llm_json(user_prompt, max_tokens=2500)
+        data = await self._llm_json(user_prompt, max_tokens=4096)
         artifact = ArchitectureArtifact.model_validate(data)
         self._save_artifact(artifact, "02_architecture_artifact.json")
         return artifact

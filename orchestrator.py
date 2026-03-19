@@ -616,7 +616,7 @@ async def _get_decision(
                 system=orchestrator_prompt,
                 user=prompt,
                 model=model,
-                max_tokens=600,
+                max_tokens=1500,
                 response_format="json",
             )
         except RuntimeError as exc:
