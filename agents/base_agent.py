@@ -117,8 +117,8 @@ async def _query_anthropic(
             "Do not include markdown fences, explanations, or any text outside the JSON object."
         )
 
-    max_retries = 3
-    backoff = 5
+    max_retries = 6
+    backoff = 10
 
     async with semaphore:
         for attempt in range(1, max_retries + 1):
@@ -162,11 +162,17 @@ async def _query_anthropic(
                 console.print(
                     f"[yellow]Anthropic error (attempt {attempt}/{max_retries}): {err_str}[/yellow]"
                 )
-                if attempt == max_retries or is_fatal:
+                if is_fatal:
+                    raise RuntimeError(
+                        f"Anthropic call failed (non-retriable): {err_str}"
+                    ) from exc
+                if attempt == max_retries:
                     raise RuntimeError(
                         f"Anthropic call failed after {max_retries} attempts: {err_str}"
                     ) from exc
-                sleep_time = backoff * attempt if is_rate_limit else backoff
+                # Rate limit: back off longer — up to 60s
+                sleep_time = min(backoff * attempt * 2, 60) if is_rate_limit else backoff * attempt
+                console.print(f"[yellow]Retrying in {sleep_time}s...[/yellow]")
                 await asyncio.sleep(sleep_time)
 
     raise RuntimeError("Unreachable: _query_anthropic exhausted retries without returning")

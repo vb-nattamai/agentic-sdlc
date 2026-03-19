@@ -7,9 +7,16 @@ as a numbered JSON file under the run's output directory.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
+
+
+def _coerce_decision_record(v: object) -> object:
+    """Allow a plain string as shorthand for a DecisionRecord dict."""
+    if isinstance(v, str):
+        return {"decision": v, "rationale": "", "alternatives_rejected": []}
+    return v
 
 
 __all__ = [
@@ -87,11 +94,15 @@ class DecisionRecord(BaseModel):
     """Records an architectural or engineering decision with its rationale."""
 
     decision: str = Field(..., description="The decision that was made.")
-    rationale: str = Field(..., description="Why this decision was chosen.")
+    rationale: str = Field(default="", description="Why this decision was chosen.")
     alternatives_rejected: list[str] = Field(
         default_factory=list,
         description="Alternative options that were considered and rejected.",
     )
+
+
+# Annotated type that coerces plain strings → DecisionRecord dicts before validation
+_DecisionField = Annotated[DecisionRecord, BeforeValidator(_coerce_decision_record)]
 
 
 class DiscoveryArtifact(BaseModel):
@@ -113,7 +124,7 @@ class DiscoveryArtifact(BaseModel):
     success_criteria: list[str] = Field(
         ..., description="Measurable criteria that define a successful delivery."
     )
-    decisions: list[DecisionRecord] = Field(
+    decisions: list[_DecisionField] = Field(
         default_factory=list,
         description="Key decisions made during discovery.",
     )
@@ -152,7 +163,7 @@ class ArchitectureArtifact(BaseModel):
             "Populated by ArchitectureAgent; consumed by the orchestrator's spawn_agent tool."
         ),
     )
-    decisions: list[DecisionRecord] = Field(
+    decisions: list[_DecisionField] = Field(
         default_factory=list,
         description="Key architectural decisions.",
     )
@@ -177,7 +188,7 @@ class GeneratedSpecArtifact(BaseModel):
         default_factory=list,
         description="API paths marked x-existing: true (used in --from-run incremental mode).",
     )
-    decisions: list[DecisionRecord] = Field(
+    decisions: list[_DecisionField] = Field(
         default_factory=list,
         description="Key spec design decisions.",
     )
@@ -192,7 +203,7 @@ class ServiceArtifact(BaseModel):
     files: dict[str, str] = Field(
         ..., description="Map of relative_path -> file_content for all generated files."
     )
-    decisions: list[DecisionRecord] = Field(
+    decisions: list[_DecisionField] = Field(
         default_factory=list,
         description="Key implementation decisions.",
     )
@@ -205,7 +216,7 @@ class EngineeringArtifact(BaseModel):
         default_factory=dict,
         description="Map of blueprint name -> ServiceArtifact for each spawned DynamicAgent.",
     )
-    decisions: list[DecisionRecord] = Field(
+    decisions: list[_DecisionField] = Field(
         default_factory=list,
         description="Cross-cutting engineering decisions.",
     )
@@ -231,7 +242,7 @@ class InfrastructureArtifact(BaseModel):
         default_factory=dict,
         description="Populated during phase=apply with container status and health results.",
     )
-    decisions: list[DecisionRecord] = Field(
+    decisions: list[_DecisionField] = Field(
         default_factory=list,
         description="Infrastructure decisions.",
     )
@@ -265,7 +276,7 @@ class ReviewArtifact(BaseModel):
         default_factory=list,
         description="Service names (backend/bff/frontend) that have blocking issues.",
     )
-    decisions: list[DecisionRecord] = Field(
+    decisions: list[_DecisionField] = Field(
         default_factory=list,
         description="Review methodology decisions.",
     )
@@ -295,7 +306,7 @@ class TestingArtifact(BaseModel):
         default=False,
         description="True if Cypress e2e spec files were written (stage=live only).",
     )
-    decisions: list[DecisionRecord] = Field(
+    decisions: list[_DecisionField] = Field(
         default_factory=list,
         description="Testing strategy decisions.",
     )

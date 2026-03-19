@@ -139,6 +139,7 @@ class PipelineState:
             "constraints": self.constraints,
             "output_dir": self.output_dir,
             "requirements_length": len(self.requirements),
+            "requirements": self.requirements[:2000] + ("[truncated]" if len(self.requirements) > 2000 else ""),
         }
         return json.dumps(summary, indent=2)
 
@@ -423,6 +424,10 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
             if decision.action in ("delegate_agent", "spawn_agent"):
                 ctx = dict(params.get("context", {}))
                 ctx["model"] = model_name  # always force — LLM may suggest wrong model
+                # Auto-inject requirements for discovery so it always gets the text
+                if params.get("agent_name") == "discovery":
+                    ctx.setdefault("requirements", state.requirements)
+                    ctx.setdefault("constraints", state.constraints)
                 params["context"] = ctx
             if decision.action in ("spawn_agent", "delegate_agent"):
                 params.setdefault("output_dir", state.output_dir)
