@@ -440,6 +440,9 @@ async def run(state: PipelineState, auto: bool = False) -> PipelineState:
             if decision.action == "extract_blueprints":
                 params["model"] = model_name  # always force — LLM may suggest wrong model
                 params.setdefault("output_dir", state.output_dir)
+                # Auto-inject architecture artifact so LLM doesn't need to embed it
+                if "architecture" not in params and "architecture" in state.artifacts:
+                    params["architecture"] = state.artifacts["architecture"]
 
         tool_fn = TOOL_REGISTRY[decision.action]
         try:
@@ -613,7 +616,7 @@ async def _get_decision(
                 system=orchestrator_prompt,
                 user=prompt,
                 model=model,
-                max_tokens=400,
+                max_tokens=600,
                 response_format="json",
             )
         except RuntimeError as exc:
