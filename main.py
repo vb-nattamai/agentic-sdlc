@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -290,30 +293,325 @@ def load_requirements(args: argparse.Namespace, config: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# from-run: load existing spec
+# Prior-run context loader
 # ---------------------------------------------------------------------------
 
 
-def load_existing_spec(from_run_dir: str) -> str:
+def load_prior_run_artifacts(from_run_dir: str) -> dict[str, Any]:
     """
-    Load existing OpenAPI YAML from a previous run's generated/specs/ directory.
+    Load ALL artifact JSON files from a previous pipeline run.
+
+    Pre-populates state.artifacts so the orchestrator can see what was already
+    built and skip stages that are already complete.  When prior discovery,
+    architecture, or spec artifacts are present the LLM skips those stages
+    automatically and proceeds directly to extending the existing project.
+
+    Artifacts loaded:
+        discovery, architecture, engineering, spec, review  (named JSONs)
+        completed_artifacts[<name>]                         (service JSONs)
+        existing_spec                                       (openapi.yaml)
 
     Args:
         from_run_dir: Path to the previous run's root output directory.
 
     Returns:
-        OpenAPI YAML string with existing content (or empty string if not found).
+        Dict mapping artifact keys to their loaded content.
     """
-    specs_dir = Path(from_run_dir) / "generated" / "specs"
-    openapi_path = specs_dir / "openapi.yaml"
+    loaded: dict[str, Any] = {}
+    run_dir = Path(from_run_dir)
 
+    if not run_dir.exists():
+        console.print(f"[yellow]Prior run directory not found: {from_run_dir}[/yellow]")
+        return loaded
+
+    named: dict[str, str] = {
+        "01_discovery_artifact.json": "discovery",
+        "02_architecture_artifact.json": "architecture",
+        "03_engineering_artifact.json": "engineering",
+        "04_generated_spec_artifact.json": "spec",
+        "04_review_artifact.json": "review",
+    }
+    for filename, key in named.items():
+        path = run_dir / filename
+        if path.exists():
+            try:
+                loaded[key] = json.loads(path.read_text(encoding="utf-8"))
+                console.print(f"[green]✓ Loaded prior {key}[/green]")
+            except Exception as exc:  # noqa: BLE001
+                console.print(f"[yellow]Could not load {filename}: {exc}[/yellow]")
+
+    for svc_path in sorted(run_dir.glob("*_service_artifact.json")):
+        name = svc_path.stem.replace("_service_artifact", "")
+        try:
+            data = json.loads(svc_path.read_text(encoding="utf-8"))
+            loaded.setdefault("completed_artifacts", {})[name] = data
+            console.print(f"[green]✓ Loaded prior service '{name}'[/green]")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Could not load {svc_path.name}: {exc}[/yellow]")
+
+    openapi_path = run_dir / "generated" / "specs" / "openapi.yaml"
     if openapi_path.exists():
-        content = openapi_path.read_text(encoding="utf-8")
-        console.print(f"[green]✓ Loaded existing spec from {openapi_path}[/green]")
-        return content
+        loaded["existing_spec"] = openapi_path.read_text(encoding="utf-8")
+        console.print("[green]✓ Loaded existing OpenAPI spec[/green]")
 
-    console.print(f"[yellow]No openapi.yaml found in {specs_dir}[/yellow]")
-    return ""
+    console.print(f"[dim]Prior context: {len(loaded)} artifacts loaded from {from_run_dir}[/dim]")
+    return loaded
+
+
+# ---------------------------------------------------------------------------
+# Small focused helpers (extracted to keep main() under 15 lines)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_model(args: argparse.Namespace, config: dict) -> str:
+    """Pick model: --model flag > PIPELINE_MODEL env > config file > gpt-4o."""
+    return args.model or os.environ.get("PIPELINE_MODEL") or config.get("model") or "gpt-4o"
+
+
+def _resolve_output_dir(args: argparse.Namespace, config: dict) -> str:
+    """Pick output directory: flag > config > timestamped default."""
+    return (
+        args.output_dir
+        or config.get("output_dir")
+        or f"artifacts/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+
+
+def _resolve_constraints(args: argparse.Namespace, config: dict) -> dict[str, str]:
+    """Build constraints dict from --tech-constraints / --arch-constraints / config."""
+    constraints: dict[str, str] = {}
+    tech = args.tech_constraints or config.get("spec", {}).get("tech_constraints", "")
+    arch = args.arch_constraints or config.get("spec", {}).get("arch_constraints", "")
+    if tech:
+        constraints["tech_constraints"] = tech
+    if arch:
+        constraints["arch_constraints"] = arch
+    return constraints
+
+
+def _load_spec_files(paths: list[str]) -> list[str]:
+    """Read --spec files from disk; warn and skip if a file is missing."""
+    specs: list[str] = []
+    for spec_path in paths:
+        p = Path(spec_path)
+        if p.exists():
+            specs.append(p.read_text(encoding="utf-8"))
+            console.print(f"[green]✓ Loaded spec file: {spec_path}[/green]")
+        else:
+            console.print(f"[yellow]Spec file not found: {spec_path}[/yellow]")
+    return specs
+
+
+def save_project_context(state: "PipelineState") -> str:  # type: ignore[name-defined]  # noqa: F821
+    """
+    Write PROJECT_CONTEXT.md to the output directory.
+
+    This is the primary artifact for context-aware incremental development.
+    Pass the output directory with --from-run on the next run and the pipeline
+    loads every prior artifact automatically — no re-explaining needed.
+
+    Args:
+        state: Completed pipeline state.
+
+    Returns:
+        Absolute path to the written PROJECT_CONTEXT.md.
+    """
+    output_dir = Path(state.output_dir)
+    req_preview = state.requirements[:400] + ("\u2026" if len(state.requirements) > 400 else "")
+
+    lines: list[str] = [
+        f"# Project Context \u2014 {output_dir.name}",
+        "",
+        "> Auto-generated by [Agentic SDLC](https://github.com/vb-nattamai/agentic-sdlc).",
+        "> Pass this directory with `--from-run` to extend the project without re-explaining context.",
+        "",
+        "## Requirements",
+        "",
+        "```",
+        req_preview,
+        "```",
+        "",
+    ]
+
+    arch = state.artifacts.get("architecture", {})
+    if arch:
+        lines += ["## Architecture", "", f"**Style**: {arch.get('style', 'unknown')}", ""]
+        for c in arch.get("components", []):
+            name = c.get("name", "?")
+            tech = c.get("technology", c.get("tech", "?"))
+            port = c.get("port", "\u2014")
+            role = c.get("responsibility", c.get("role", ""))
+            lines.append(f"- **{name}** ({tech}, port {port}) \u2014 {role}")
+        lines.append("")
+        decisions = arch.get("decisions", [])
+        if decisions:
+            lines.append("**Key Decisions**:")
+            for d in decisions[:6]:
+                lines.append(f"- {d.get('decision', '?')}: {d.get('rationale', '')}")
+            lines.append("")
+
+    if state.active_agents:
+        lines += [
+            "## Technology Stack", "",
+            "| Service | Technology | Port | Role |",
+            "|---------|-----------|------|------|",
+        ]
+        for bp in state.active_agents:
+            lines.append(
+                f"| {bp.get('name')} | {bp.get('technology')} | "
+                f"{bp.get('port') or '\u2014'} | {bp.get('role')} |"
+            )
+        lines.append("")
+
+    spec = state.artifacts.get("spec", {})
+    openapi = (spec.get("openapi_yaml") or "") if spec else ""
+    if openapi:
+        lines += [
+            "## API Contract", "", "```yaml",
+            openapi[:800] + ("\u2026" if len(openapi) > 800 else ""),
+            "```", "",
+        ]
+
+    engineering = state.artifacts.get("engineering", {})
+    services = (engineering.get("services") or {}) if engineering else {}
+    if services:
+        lines += ["## Generated Code", "", "| Service | Files |", "|---------|-------|"]  
+        for svc, data in services.items():
+            lines.append(f"| {svc} | {len(data.get('files', {}))} files |")
+        lines += ["", f"Source files are in `{output_dir}/generated/`.", ""]
+
+    review = state.artifacts.get("review", {})
+    if review:
+        result = "\u2705 Passed" if review.get("passed") else "\u274c Failed"
+        lines += [
+            "## Quality Gate", "",
+            "| Metric | Score |", "|--------|-------|",
+            f"| Security | {review.get('security_score', '?')} |",
+            f"| Reliability | {review.get('reliability_score', '?')} |",
+            f"| Quality | {review.get('quality_score', '?')} |",
+            "", f"**Result**: {result}", "",
+        ]
+
+    if state.completed_steps:
+        lines += ["## Pipeline Stages Completed", ""]
+        lines += [f"- \u2713 {step}" for step in state.completed_steps]
+        lines.append("")
+
+    lines += [
+        "## Extend This Project",
+        "",
+        "```bash",
+        "# Continue from the last checkpoint",
+        f"python3 main.py --resume {output_dir}/checkpoints/step_N.json",
+        "",
+        "# Add new features — full prior context is loaded automatically",
+        f"python3 main.py --from-run {output_dir} --requirements new_features.txt",
+        "```",
+        "",
+        "---",
+        f"_Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_",
+    ]
+
+    context_path = output_dir / "PROJECT_CONTEXT.md"
+    context_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    console.print(f"[green]\u2713 Project context \u2192 {context_path}[/green]")
+    return str(context_path)
+
+
+def _print_startup_panel(
+    state: "PipelineState",  # type: ignore[name-defined]  # noqa: F821
+    model: str,
+    from_run: str | None,
+) -> None:
+    """Print the pipeline startup information panel."""
+    console.print(
+        Panel(
+            f"[bold]Model:[/bold]       {model}\n"
+            f"[bold]Output dir:[/bold]  {state.output_dir}\n"
+            f"[bold]Requirements:[/bold] {len(state.requirements)} chars\n"
+            f"[bold]Auto mode:[/bold]   {state.config.get('auto', False)}\n"
+            f"[bold]From run:[/bold]    {from_run or 'N/A'}\n"
+            f"[bold]Constraints:[/bold] {len(state.constraints)} loaded",
+            title="[bold green]\U0001f680 Agentic SDLC Pipeline[/bold green]",
+            border_style="green",
+        )
+    )
+
+
+async def _execute_pipeline(
+    state: "PipelineState",  # type: ignore[name-defined]  # noqa: F821
+    auto: bool,
+    orchestrator_run: Any,
+    pipeline_halt_error: type,
+) -> None:
+    """Run the orchestrator loop and handle all exit conditions."""
+    try:
+        final_state = await orchestrator_run(state, auto=auto)
+        _print_final_summary(final_state)
+    except pipeline_halt_error as exc:
+        console.print(Panel(str(exc), title="[red]Pipeline Halted[/red]", border_style="red"))
+        sys.exit(1)
+    except RuntimeError as exc:
+        console.print(Panel(str(exc), title="[red]Pipeline Error[/red]", border_style="red"))
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Pipeline interrupted by user.[/yellow]")
+        sys.exit(130)
+
+
+async def _run_resume(
+    checkpoint_path: str,
+    model: str,
+    auto: bool,
+    orchestrator_run: Any,
+    pipeline_halt_error: type,
+) -> None:
+    """Load a checkpoint file and resume the pipeline from that point."""
+    from checkpoints import load_and_resume
+    state = await load_and_resume(checkpoint_path)
+    state.config["model"] = model
+    await _execute_pipeline(state, auto, orchestrator_run, pipeline_halt_error)
+
+
+async def _run_fresh(
+    args: argparse.Namespace,
+    model: str,
+    config: dict,
+    pipeline_state: type,
+    orchestrator_run: Any,
+    pipeline_halt_error: type,
+) -> None:
+    """Build a new PipelineState from CLI args and run a full pipeline."""
+    await check_prerequisites(model)
+    requirements = load_requirements(args, config)
+    output_dir = _resolve_output_dir(args, config)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    constraints = _resolve_constraints(args, config)
+    initial_artifacts: dict[str, Any] = {}
+
+    if args.from_run:
+        initial_artifacts = load_prior_run_artifacts(args.from_run)
+        if initial_artifacts:
+            constraints["incremental_mode"] = (
+                f"Extending existing project from {args.from_run}. "
+                "All existing API paths must be preserved with x-existing: true. "
+                "Prior artifacts are already loaded — skip stages that are already complete."
+            )
+
+    spec_files = _load_spec_files(args.spec)
+    if spec_files:
+        initial_artifacts["spec_files"] = spec_files
+
+    state = pipeline_state(
+        requirements=requirements,
+        output_dir=output_dir,
+        artifacts=initial_artifacts,
+        constraints=constraints,
+        config={"model": model, "auto": args.auto, "from_run": args.from_run},
+    )
+    _print_startup_panel(state, model, args.from_run)
+    await _execute_pipeline(state, args.auto, orchestrator_run, pipeline_halt_error)
 
 
 # ---------------------------------------------------------------------------
@@ -322,161 +620,33 @@ def load_existing_spec(from_run_dir: str) -> str:
 
 
 async def main() -> None:
-    """
-    Main async entry point for the Agentic SDLC CLI.
-
-    Parses args, validates prerequisites, builds state, and starts the pipeline.
-    """
-    import os
-
+    """Parse CLI arguments and dispatch to the appropriate pipeline runner."""
     from orchestrator import PipelineState, PipelineHaltError, run as orchestrator_run
 
     parser = build_parser()
     args = parser.parse_args()
-
-    # Determine model
-    model = (
-        args.model
-        or os.environ.get("PIPELINE_MODEL")
-        or "gpt-4o"
-    )
-
-    # Load config
     config = load_config(args.config)
-    if not args.model and config.get("model"):
-        model = config["model"]
+    model = _resolve_model(args, config)
 
-    # ------------------------------------------------------------------
-    # Resume mode
-    # ------------------------------------------------------------------
     if args.resume:
-        from checkpoints import load_and_resume
-        state = await load_and_resume(args.resume)
-        state.config["model"] = model
-        try:
-            final_state = await orchestrator_run(state, auto=args.auto)
-            _print_final_summary(final_state)
-        except PipelineHaltError as exc:
-            console.print(
-                Panel(str(exc), title="[red]Pipeline Halted[/red]", border_style="red")
-            )
-            sys.exit(1)
-        return
-
-    # ------------------------------------------------------------------
-    # Fresh run
-    # ------------------------------------------------------------------
-    await check_prerequisites(model)
-
-    requirements = load_requirements(args, config)
-
-    # Output directory
-    output_dir = (
-        args.output_dir
-        or config.get("output_dir")
-        or f"artifacts/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    )
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-    # Build constraints dict
-    constraints: dict[str, str] = {}
-    tech = args.tech_constraints or config.get("spec", {}).get("tech_constraints", "")
-    arch = args.arch_constraints or config.get("spec", {}).get("arch_constraints", "")
-    if tech:
-        constraints["tech_constraints"] = tech
-    if arch:
-        constraints["arch_constraints"] = arch
-
-    # --from-run: load existing spec into initial artifacts
-    initial_artifacts: dict = {}
-    if args.from_run:
-        existing_spec = load_existing_spec(args.from_run)
-        if existing_spec:
-            initial_artifacts["existing_spec"] = existing_spec
-            constraints["incremental_mode"] = (
-                f"Extending existing spec from {args.from_run}. "
-                "All existing API paths must be preserved with x-existing: true."
-            )
-
-    # Load any --spec files
-    spec_files = []
-    for spec_path in args.spec:
-        p = Path(spec_path)
-        if p.exists():
-            spec_files.append(p.read_text(encoding="utf-8"))
-            console.print(f"[green]✓ Loaded spec file: {spec_path}[/green]")
-        else:
-            console.print(f"[yellow]Spec file not found: {spec_path}[/yellow]")
-
-    if spec_files:
-        initial_artifacts["spec_files"] = spec_files
-
-    # Build initial state
-    state = PipelineState(
-        requirements=requirements,
-        output_dir=output_dir,
-        artifacts=initial_artifacts,
-        constraints=constraints,
-        config={
-            "model": model,
-            "auto": args.auto,
-            "from_run": args.from_run,
-        },
-    )
-
-    # Startup panel
-    console.print(
-        Panel(
-            f"[bold]Model:[/bold]       {model}\n"
-            f"[bold]Output dir:[/bold]  {output_dir}\n"
-            f"[bold]Requirements:[/bold] {len(requirements)} chars\n"
-            f"[bold]Auto mode:[/bold]   {args.auto}\n"
-            f"[bold]From run:[/bold]    {args.from_run or 'N/A'}\n"
-            f"[bold]Constraints:[/bold] {len(constraints)} loaded",
-            title="[bold green]🚀 Agentic SDLC Pipeline[/bold green]",
-            border_style="green",
-        )
-    )
-
-    try:
-        final_state = await orchestrator_run(state, auto=args.auto)
-        _print_final_summary(final_state)
-    except PipelineHaltError as exc:
-        console.print(
-            Panel(str(exc), title="[red]Pipeline Halted[/red]", border_style="red")
-        )
-        sys.exit(1)
-    except RuntimeError as exc:
-        # Covers LLM rate-limit and connection failures that escape the orchestrator
-        console.print(
-            Panel(
-                str(exc),
-                title="[red]Pipeline Error[/red]",
-                border_style="red",
-            )
-        )
-        sys.exit(1)
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Pipeline interrupted by user.[/yellow]")
-        sys.exit(130)
+        await _run_resume(args.resume, model, args.auto, orchestrator_run, PipelineHaltError)
+    else:
+        await _run_fresh(args, model, config, PipelineState, orchestrator_run, PipelineHaltError)
 
 
 def _print_final_summary(state: "PipelineState") -> None:  # type: ignore[name-defined]  # noqa: F821
-    """
-    Print a final summary panel after pipeline completion.
-
-    Args:
-        state: Final pipeline state.
-    """
-    completed = "\n".join(f"  ✓ {s}" for s in state.completed_steps)
-    artifacts = "\n".join(f"  • {k}" for k in state.artifacts)
+    """Print the completion panel and write PROJECT_CONTEXT.md."""
+    context_path = save_project_context(state)
+    completed = "\n".join(f"  \u2713 {s}" for s in state.completed_steps)
+    artifacts = "\n".join(f"  \u2022 {k}" for k in state.artifacts)
     console.print(
         Panel(
             f"[bold green]Pipeline completed successfully![/bold green]\n\n"
-            f"[bold]Output directory:[/bold] {state.output_dir}\n\n"
+            f"[bold]Output directory:[/bold] {state.output_dir}\n"
+            f"[bold]Project context:[/bold]  {context_path}\n\n"
             f"[bold]Completed stages:[/bold]\n{completed}\n\n"
             f"[bold]Artifacts generated:[/bold]\n{artifacts}",
-            title="✅ Agentic SDLC Complete",
+            title="\u2705 Agentic SDLC Complete",
             border_style="green",
         )
     )

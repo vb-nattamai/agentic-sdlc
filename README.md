@@ -1,7 +1,359 @@
 # Agentic SDLC
 
-A **fully dynamic, LLM-orchestrated software development pipeline** that generates
-a containerised application — of any shape — from a plain-English requirements file.
+**Plain English in. Production code out.**
+
+Describe what you want to build. The pipeline designs the architecture, spawns the right agents for your tech stack, writes all the source code, containerises it, and tests it — automatically.
+
+Works for any language, any framework, any cloud.
+
+---
+
+## Quickstart
+
+```bash
+git clone https://github.com/vb-nattamai/agentic-sdlc && cd agentic-sdlc
+pip install -r requirements.txt
+gh auth login
+echo "Build a REST API for a todo app in FastAPI with PostgreSQL" > reqs.txt
+python3 main.py --requirements reqs.txt
+```
+
+That's it. Grab a coffee ☕ — the pipeline handles everything else.
+
+---
+
+## What Can I Build With This?
+
+### Web Applications
+
+| What you write | What gets generated |
+|---|---|
+| React dashboard with a Node.js API | React 18 + TypeScript, Express, Prisma, PostgreSQL, Docker Compose |
+| Next.js SaaS with auth and billing | Next.js 14, tRPC, NextAuth.js, Stripe, PostgreSQL, Tailwind CSS |
+| Vue admin panel with a FastAPI backend | Vue 3 + Pinia, Python FastAPI, SQLAlchemy, Alembic migrations |
+| Angular app with Spring Boot | Angular 17, Kotlin Spring Boot 3, JPA, Flyway |
+| Svelte app with a Go backend | SvelteKit, Go + Gin, GORM, PostgreSQL |
+
+### Mobile Apps
+
+| What you write | What gets generated |
+|---|---|
+| iOS todo app in SwiftUI with a REST backend | Swift + SwiftUI, Kotlin Spring Boot API, PostgreSQL |
+| Android e-commerce app | Kotlin + Jetpack Compose, Go + Gin, Redis cache |
+| Flutter social app for iOS and Android | Flutter (Dart), Node.js API, MongoDB, Firebase Push |
+| React Native fitness tracker | React Native + Expo, Python FastAPI, InfluxDB |
+| iOS + Android app sharing one backend | SwiftUI + Kotlin Android, shared Kotlin Spring Boot API |
+
+### Backend & APIs
+
+| What you write | What gets generated |
+|---|---|
+| GraphQL API for a blog in Node.js | Apollo Server, TypeScript, Prisma, PostgreSQL |
+| gRPC microservices in Go | auth, user, product services in Go + Protobuf definitions |
+| Python data pipeline for ETL | ingestion, transform, load workers, Airflow DAG |
+| Rust REST API | Rust + Axum, SQLx, PostgreSQL, Docker |
+| Ruby on Rails monolith | Rails 7, ActiveRecord, Sidekiq, Redis, PostgreSQL |
+| Django REST Framework API | Python Django, DRF, Celery, Redis, PostgreSQL |
+| Kotlin Spring Boot microservices | auth, orders, notifications services + API gateway |
+
+### Infrastructure & Cloud
+
+| What you write | What gets generated |
+|---|---|
+| AWS infrastructure with CDK | TypeScript CDK stacks, Lambda, DynamoDB, S3, API Gateway |
+| Terraform for a Kubernetes cluster | Terraform modules, EKS/GKE config, Helm charts, Ingress |
+| Kubernetes manifests for microservices | Deployments, Services, HPA, ConfigMaps, Secrets, Ingress |
+| Docker Compose for a 5-service app | Dockerfiles per service, docker-compose.yml, health checks |
+| Serverless API on AWS Lambda | Node.js Lambda functions, API Gateway, DynamoDB, SAM template |
+
+### Other
+
+| What you write | What gets generated |
+|---|---|
+| CLI tool in Python | Python + Click, subcommands, config file support, tests |
+| CLI tool in Go | Go + Cobra, cross-platform build scripts |
+| Event-driven system | Kafka producer + consumer, Spring Boot, PostgreSQL, dashboard |
+| WebSocket real-time app | Node.js + Socket.io, React, Redis pub/sub |
+| ML model serving API | FastAPI + Pydantic, model loading, prediction endpoints |
+
+---
+
+## How It Works
+
+1. **Write a requirements file** — plain English, any length, any level of detail
+2. **Discovery** — the pipeline structures your requirements into goals, constraints, and success criteria
+3. **Architecture** — the LLM designs the system and produces one blueprint per service
+4. **Spec** — OpenAPI + SQL DDL contract generated; pipeline pauses for your review
+5. **Code generation** — each service is generated in parallel by a dedicated short-lived agent; dependent services automatically receive their peer's API contracts
+6. **Infrastructure** — Dockerfiles and Docker Compose generated
+7. **Review** — OWASP security scan + quality scoring; automatically retries if it fails
+8. **Deploy & Test** — containers started, live HTTP tests run
+
+```mermaid
+flowchart LR
+    R([requirements.txt]) --> D[Discovery]
+    D --> A[Architecture]
+    A --> E[extract blueprints]
+    E --> W[Wave Executor\nparallel code gen]
+    W --> I[Infrastructure]
+    I --> RV[Review\nfix loop]
+    RV --> T[Live Tests]
+    T --> Done([✅ generated/])
+```
+
+The pipeline is **fully dynamic** — it never has a hardcoded list of agents or steps. The orchestrator LLM reads the current state after every action and decides what to do next.
+
+---
+
+## Prerequisites
+
+- **Python 3.11+**
+- **Docker** running locally
+- **GitHub CLI** (`gh`) with [Models API access](https://github.com/marketplace/models)
+
+```bash
+pip install -r requirements.txt
+gh auth login
+```
+
+---
+
+## CLI Reference
+
+```
+python3 main.py [OPTIONS]
+
+  --requirements FILE    Requirements text file (default: requirements.txt)
+  --interactive          Type requirements at the terminal
+  --auto                 Skip all human checkpoints (CI/CD mode)
+  --model STR            LLM model override (default: gpt-4o)
+  --output-dir DIR       Where to write all artifacts
+  --tech-constraints STR e.g. "Kotlin 1.9 only, no Scala"
+  --arch-constraints STR e.g. "stateless services, JWT auth"
+  --from-run DIR         Extend an existing project — all prior context loaded
+  --resume FILE          Resume from a saved checkpoint
+  --config FILE          Load settings from pipeline.yaml
+  --spec FILE            Include an existing spec file (repeatable)
+```
+
+### Common patterns
+
+```bash
+# Standard run — pauses for review at key stages
+python3 main.py --requirements reqs.txt
+
+# Fully automatic, no pauses (CI/CD)
+python3 main.py --requirements reqs.txt --auto
+
+# Specify the tech stack
+python3 main.py --requirements reqs.txt \
+  --tech-constraints "Go 1.22 only, no Node.js" \
+  --arch-constraints "stateless services, JWT, no sessions"
+
+# Add features to an existing project (no re-explaining needed)
+python3 main.py \
+  --from-run artifacts/run_20260318_120000 \
+  --requirements new_features.txt
+
+# Resume after a checkpoint or Ctrl+C
+python3 main.py --resume artifacts/run_.../checkpoints/step_3.json
+
+# Use a config file (see pipeline.yaml)
+python3 main.py --config my_project.yaml
+```
+
+---
+
+## Output
+
+Every run creates a timestamped directory:
+
+```
+artifacts/run_YYYYMMDD_HHMMSS/
+│
+├── PROJECT_CONTEXT.md          ← human-readable summary of everything built
+│                                  use with --from-run to extend the project
+├── generated/
+│   ├── <service>/              ← one directory per service (backend, frontend, …)
+│   ├── specs/
+│   │   ├── openapi.yaml
+│   │   └── schema.sql
+│   └── docker-compose.yml
+│
+├── 01_discovery_artifact.json
+├── 02_architecture_artifact.json
+├── 04_generated_spec_artifact.json
+├── <name>_service_artifact.json  (one per service)
+└── ...
+```
+
+**`PROJECT_CONTEXT.md`** is the most important output file. It captures everything — architecture decisions, technology choices, API contracts, quality scores — in a readable format. Open it to understand what was built, or pass the directory to `--from-run` to continue where you left off.
+
+---
+
+## Extending a Project (Context-Aware Runs)
+
+After every run, `PROJECT_CONTEXT.md` is written automatically. When you use `--from-run`, ALL previous artifacts are loaded — the pipeline sees what was already built and skips straight to adding what's new.
+
+```bash
+# First run — builds a todo API from scratch
+python3 main.py \
+  --requirements "Build a todo API in FastAPI with user accounts" \
+  --output-dir artifacts/my_todo_project
+
+# Second run — add a feature without re-describing the whole project
+python3 main.py \
+  --from-run artifacts/my_todo_project \
+  --requirements "Add email notifications when a task is assigned to a user"
+```
+
+The second run loads the prior discovery, architecture, spec, and all service artifacts. The orchestrator sees these are already complete and jumps straight to the new notification service — no redundant work.
+
+---
+
+## Human Control Points
+
+At key stages the pipeline pauses and shows:
+
+```
+⏸  Human Review Required
+──────────────────────────────────────────
+Reason: Spec complete — API contract ready for review
+Proposed: delegate_agent / testing
+
+Commands:
+  [Enter]              Continue
+  c <text>             Inject a constraint  (e.g. c Use Redis not Memcached)
+  e <artifact-name>    Edit an artifact directly
+  s                    Save state and exit  (resumable later with --resume)
+  a                    Abort immediately
+```
+
+Use `--auto` to skip all pauses.
+
+---
+
+## Customising Agent Behaviour
+
+All agent behaviour is in markdown prompt files — no code changes needed:
+
+| File | Controls |
+|---|---|
+| `prompts/orchestrator.md` | Overall routing logic and stage ordering |
+| `prompts/discovery_agent.md` | How requirements are parsed |
+| `prompts/architecture_agent.md` | System design rules and blueprint generation |
+| `prompts/spec_agent.md` | OpenAPI and SQL DDL generation |
+| `prompts/dynamic_agent.md` | Code generation rules for ALL services |
+| `prompts/review_agent.md` | Security checklist and quality thresholds |
+| `prompts/testing_agent.md` | Test strategy |
+| `prompts/infrastructure_agent.md` | Docker and IaC rules |
+
+---
+
+## How It Differs From a Prompt Chain
+
+| Hardcoded prompt chain | Agentic SDLC |
+|---|---|
+| Fixed agents: backend, bff, frontend | Agents derived from architecture — any stack, any count |
+| Fixed sequence: step 1 → 2 → 3 | Orchestrator decides next action from current state |
+| No recovery from failures | Detects loops, injects constraints, retries intelligently |
+| No human control | Meaningful pauses with constraint injection and artifact editing |
+| Cannot fix its own code | Review → fix → redeploy loop until quality gate passes |
+| Re-runs from scratch | `--from-run` loads all prior context; skips completed stages |
+
+---
+
+## Architecture (For the Curious)
+
+### Wave-Based Parallel Code Generation
+
+The pipeline groups services into execution waves based on their dependencies. Services in the same wave run in parallel. When a wave completes, the next wave starts and receives the actual generated files (API interfaces, protobuf definitions, typed clients) from its dependencies — so a BFF agent can generate the exact HTTP client for the backend it depends on.
+
+```mermaid
+sequenceDiagram
+    participant WE as Wave Executor
+    participant A as auth (Wave 0)
+    participant W as worker (Wave 0)
+    participant BE as backend (Wave 1)
+    participant BF as bff (Wave 2)
+
+    par Wave 0 — no dependencies
+        WE->>A: generate
+        WE->>W: generate
+    end
+    A-->>WE: auth_service_artifact (interfaces, ports)
+    W-->>WE: worker_service_artifact
+
+    WE->>BE: generate + peer: auth files
+    note over BE: writes correct AuthClient\nagainst real auth interface
+    BE-->>WE: backend_service_artifact
+
+    WE->>BF: generate + peer: backend files
+    note over BF: writes typed SDK against\nreal backend contracts
+```
+
+### System Components
+
+```mermaid
+flowchart TD
+    subgraph CLI["main.py"]
+        ARGS[parse args]
+        PRE[check prerequisites\ngh auth · docker]
+        CTX[load prior context\n--from-run]
+    end
+
+    subgraph LOOP["orchestrator.py — dynamic loop"]
+        STATE[("PipelineState\nartifacts · history · blueprints")]
+        LLM["gpt-4o\nGitHub Models API"]
+        DEC["OrchestratorDecision\naction · params · done"]
+        STATE -->|compact JSON summary| LLM --> DEC -->|execute tool| STATE
+    end
+
+    subgraph TOOLS["10 tools available"]
+        DA[delegate_agent]
+        EB[extract_blueprints]
+        SA[spawn_agent]
+        FT[file_read/write/patch/list]
+        SH[shell_exec]
+        WF[web_fetch · api_call]
+    end
+
+    subgraph AGENTS["Fixed Pipeline Agents"]
+        DISC[Discovery] --> ARCH[Architecture]
+        ARCH --> SPEC[Spec] --> INFRA[Infrastructure]
+        INFRA --> REV[Review] --> TEST[Testing]
+    end
+
+    subgraph DYNAMIC["Dynamic Code-Gen"]
+        BP[AgentBlueprint\nfrom architecture]
+        DYN[DynamicAgent\nuniversal prompt\n+ blueprint context]
+        GEN[generated/]
+        BP --> DYN --> GEN
+    end
+
+    CLI --> LOOP
+    LOOP --> TOOLS
+    DA --> AGENTS
+    EB --> BP
+    SA --> DYNAMIC
+```
+
+---
+
+## Contributing
+
+1. Fork + clone
+2. Edit a prompt file (`prompts/*.md`) or agent (`agents/*.py`)
+3. Test: `python3 main.py --requirements test_requirements.txt --auto`
+4. Run tests: `pytest`
+5. Open a pull request
+
+---
+
+## Licence
+
+MIT
+
 
 Unlike hardcoded prompt chains, Agentic SDLC uses an orchestrator LLM that reads the
 full pipeline state after every tool call and decides what to do next. Crucially,
