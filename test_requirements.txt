@@ -1,0 +1,5 @@
+Build a simple REST API todo application with:
+- A single backend service in Python (FastAPI)
+- Endpoints: GET /todos, POST /todos, DELETE /todos/{id}
+- In-memory storage (no database)
+- Health endpoint at GET /health

@@ -446,6 +446,16 @@ async def main() -> None:
             Panel(str(exc), title="[red]Pipeline Halted[/red]", border_style="red")
         )
         sys.exit(1)
+    except RuntimeError as exc:
+        # Covers LLM rate-limit and connection failures that escape the orchestrator
+        console.print(
+            Panel(
+                str(exc),
+                title="[red]Pipeline Error[/red]",
+                border_style="red",
+            )
+        )
+        sys.exit(1)
     except KeyboardInterrupt:
         console.print("\n[yellow]Pipeline interrupted by user.[/yellow]")
         sys.exit(130)

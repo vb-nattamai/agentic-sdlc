@@ -545,13 +545,20 @@ async def _get_decision(
     last_error = ""
 
     for attempt in range(1, 4):
-        raw = await query_llm(
-            system=orchestrator_prompt,
-            user=prompt,
-            model=model,
-            max_tokens=1024,
-            response_format="json",
-        )
+        try:
+            raw = await query_llm(
+                system=orchestrator_prompt,
+                user=prompt,
+                model=model,
+                max_tokens=1024,
+                response_format="json",
+            )
+        except RuntimeError as exc:
+            # Rate limit or connection failure — surface immediately as a clean halt
+            raise PipelineHaltError(
+                f"LLM unavailable at iteration {iteration}: {exc}",
+                state=state,
+            ) from exc
         try:
             data = json.loads(raw)
             return OrchestratorDecision.model_validate(data)
